@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import ttk
 import cv2 as cv
 from PIL import Image, ImageTk
 import os
@@ -11,14 +12,15 @@ import queue
 class UserInterface:
     frame_box = queue.Queue(maxsize=1)
     cascade = cv.CascadeClassifier("haarcascade_frontalface_default.xml")
+    os.makedirs("Models", exist_ok=True)
+    os.chdir("Models")
+    trained_models = [f for f in os.listdir() if f.endswith("yml")]
     start_detecting = False
     how_much_train_img = 0
     count = 0
     imgs = []
 
     def createTrainModel(self, name):
-        os.makedirs("Models", exist_ok=True)
-        os.chdir("Models")
         recognizer = cv.face.LBPHFaceRecognizer_create()
         labels_map = {1: name}
         labels = []
@@ -61,7 +63,7 @@ class UserInterface:
                     return False
 
 
-    def RecordFunction(self, live, label, count, btn, input_field):
+    def RecordFunction(self, live=None, label=None, count=None, btn=None, input_field=None, cameraViewTwo=None):
         res, frame = live.read()
         if res: 
               if self.start_detecting == True:
@@ -85,8 +87,10 @@ class UserInterface:
               FromArrImg = Image.fromarray(RGB_img)
               photo = ImageTk.PhotoImage(image=FromArrImg)
               label.photo_image = photo
+              cameraViewTwo.photo_image = photo
               label.configure(image=photo)
-              label.after(10, lambda: self.RecordFunction(live, label, count, btn, input_field))
+              cameraViewTwo.configure(image=photo)
+              label.after(10, lambda: self.RecordFunction(live, label, count, btn, input_field, cameraViewTwo))
     
     def UserInterface(self):
         live = cv.VideoCapture(0)
@@ -94,17 +98,34 @@ class UserInterface:
         live.set(cv.CAP_PROP_FRAME_HEIGHT, 400)
         live.set(cv.CAP_PROP_BUFFERSIZE, 1)
         root = tk.Tk()
-        root.geometry("600x500")
+        root.geometry("600x600")
         root.resizable(False, False)
-        cameraView = tk.Label(root)
+        notebook = ttk.Notebook(root)
+        notebook.pack(expand=True, fill="both")
+        trainModel = tk.Frame(notebook)
+        trainModel.pack(expand=True, fill="both")
+        useModel = tk.Frame(notebook)
+        useModel.pack(expand=True, fill="both")
+        notebook.add(trainModel, text="Train Model")
+        notebook.add(useModel, text="Use Models")
+        cameraView = tk.Label(trainModel)
         cameraView.pack(padx=10, pady=10)
-        count = tk.Label(root)
+        count = tk.Label(trainModel, text="Welcome to face detector, here you can make you own model by\n giving the number of Image you want to take (100, 200...900)")
         count.pack(padx=10, pady=5)
-        input_field = tk.Entry(root)
+        input_field = tk.Entry(trainModel)
         input_field.pack(anchor="center", padx=20, pady=10)
-        btn = tk.Button(root,bg="green", fg="white", text="Click here to start face capturing", command=lambda: self.EntryValidator(input_field.get(), count, btn, "1"))
+        btn = tk.Button(trainModel,bg="green", fg="white", text="Click here to start face capturing", command=lambda: self.EntryValidator(input_field.get(), count, btn, "1"))
         btn.pack(anchor="center", padx=20, pady=10)
-        self.RecordFunction(live, cameraView, count, btn, input_field)
+        cameraViewTwo = tk.Label(useModel)
+        cameraViewTwo.pack(padx=10, pady=10)
+        self.RecordFunction(live, cameraView, count, btn, input_field, cameraViewTwo)
+        if len(self.trained_models) > 0:
+            listbox = ttk.Combobox(useModel, values=self.trained_models, state="readonly")
+            listbox.set("Select Model")
+        else:
+            listbox = ttk.Combobox(useModel, state="readonly")
+            listbox.set("No Model Found")
+        listbox.pack(padx=10, pady=5)
         root.mainloop()
 
 
