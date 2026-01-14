@@ -1,134 +1,234 @@
 import tkinter as tk
 from tkinter import ttk
+from tkinter import messagebox
 import cv2 as cv
+import threading
 from PIL import Image, ImageTk
-import os
 import numpy as np
 import re
-from threading import Thread
 import queue
+import sys
+import os
+
+live = cv.VideoCapture(0)
+live.set(cv.CAP_PROP_FRAME_WIDTH, 500)
+live.set(cv.CAP_PROP_FRAME_HEIGHT, 500)
+os.makedirs("Models", exist_ok=True)
+cascade = cv.CascadeClassifier("haarcascade_frontalface_default.xml")
+if cascade.empty():
+    messagebox.showerror(title="Error Message", message="Can't open the cascade, Try to use the full path!", icon='error')
+    os._exit(1)
+os.chdir('Models')
+shared_frame = None
+inTrain= False
+inRecognition = False
+running = True
+Known = False
+Box = threading.Lock()
+how_much_pic = 0
+count = 0
+
+class Validator:
+    @staticmethod
+    def NumberVal(step, data, textLabel, function=None):
+        global running, inTrain, how_much_pic
+        if step == "1":
+            if not inTrain:
+                if not data:
+                    textLabel.config(text="Enter a number from 100...900")
+                else:
+                    match = re.match(r'^[1-9][0-9]{2}$', data)
+                    if match:
+                        textLabel.config(text="")
+                        inTrain = True
+                        how_much_pic = int(data)
+                    else:
+                        textLabel.config(text="Enter a number from 100...900")
+        elif step == "2":
+            if not data:
+                textLabel.config(text="Enter a name with a-z, A-Z, 0-9 and '_' .")
+            else:
+                match = re.match(r'^\w{2,25}$', data)
+                if match:
+                    textLabel.config(text="Training the model....")
+                    if function != None:
+                        threading.Thread(target=function, args=(data,textLabel)).start()
+                else:
+                    textLabel.config(text="Enter a name with a-z, A-Z, 0-9 and '_' .")
+
+
+class CameraRecord:
+    recognizer = cv.face.LBPHFaceRecognizer_create()
+    coor = []
+    faces = []
+    predict = 0
+    Face = []
+    name = ""
+    #Global Vars
+
+    def FaceRecognition(self, model_name):
+        global Known, inRecognition, running
+        self.recognizer.read(model_name)
+        while inRecognition and running:
+            if len(self.Face) > 0:
+                label, conf = self.recognizer.predict(self.Face)
+                if conf <65:
+                    Known = True
+                    name = model_name.split(".")[0]
+                    self.name = name
+                else:
+                    Known = False
+
+
+
+    def LoadFaceRecognition(self, model_name, TextArea):
+        global inRecognition
+        if not os.path.exists(model_name):
+            TextArea.config(text="Selected Model Not Found")
+        else:
+            inRecognition = True
+            threading.Thread(target=self.FaceRecognition, args=(model_name,)).start()
+
+
+    def TrainModel(self, name, label):
+        ids = []
+        for _ in range(len(self.faces)):
+            ids.append(1)
+        self.recognizer.train(self.faces, np.array(ids))
+        self.recognizer.save(f"{name}.yml")
+        label.config(text='Model Trained successfuly.')
+
+    def TrainModel_Proc(self, btn, TextArea, Entry):
+        TextArea.config(text="Give the name of this person.")
+        btn.config(text="Click here to trian the model", command=lambda:Validator.NumberVal("2", Entry.get(), TextArea, self.TrainModel))
+
+
+    def FaceDetecting(self, label, btn, Entry):
+        global cascade, Box, shared_frame, inTrain, how_much_pic, count, inRecognition, Known, running
+        while running:
+            with Box:
+                captured_frame = shared_frame
+            if captured_frame is not None:
+                captured_frame = cv.resize(captured_frame, (0, 0), fx=0.5, fy=0.5, interpolation=cv.INTER_AREA)
+                gray = cv.cvtColor(captured_frame, cv.COLOR_BGR2GRAY)
+                self.coor = cascade.detectMultiScale(gray, 1.1, 6)
+                for (x, y, w, h) in self.coor:
+                    if inTrain:
+                        if count < how_much_pic:
+                            self.faces.append(gray[y:y+h, x:x+w])
+                            count += 1
+                            label.config(text=f"{count}/{how_much_pic} Captured.")
+                        else:
+                            inTrain = False
+                            self.TrainModel_Proc(btn, label, Entry)
+                    elif inRecognition:
+                        self.Face = gray[y:y+h, x:x+w]
+
+    def ShowRecord(self, CameraFieldOne, CameraFieldTwo, notebook):
+        global running, cascade, Box, shared_frame, Known
+        res, frame = live.read()
+        if not running:
+            return
+        if res:
+            with Box:
+                shared_frame = frame
+            if notebook.index(notebook.select()) == 0:
+                CameraField = CameraFieldOne
+                for (x, y, w, h) in self.coor:
+                    cv.rectangle(frame, (x*2, y*2), (x*2 + w*2, y*2 + h*2), (0, 255, 0), 2)
+            elif notebook.index(notebook.select()) == 1:
+                CameraField = CameraFieldTwo
+                for (x, y, w, h) in self.coor:
+                    if Known:
+                        cv.putText(frame, f"{self.name}", ((x-10)*2, (y-10)*2), cv.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+                        cv.rectangle(frame, (x*2, y*2), (x*2 + w*2, y*2 + h*2), (0, 255, 0), 2)
+                    else:
+                        cv.putText(frame, "Unknown", ((x-10)*2, (y-10)*2), cv.FONT_HERSHEY_COMPLEX, 1, (0, 0, 255), 2)
+                        cv.rectangle(frame, (x*2, y*2), (x*2 + w*2, y*2 + h*2), (0, 0, 255), 2)
+                    
+            
+            RGB_img = cv.cvtColor(frame, cv.COLOR_BGR2RGBA)
+            photo = Image.fromarray(RGB_img)
+            img = ImageTk.PhotoImage(photo)
+            CameraField.photo = img
+            CameraField.config(image=img)
+        if running:
+            CameraField.after(10, lambda: self.ShowRecord(CameraFieldOne, CameraFieldTwo, notebook))
+    
 
 
 class UserInterface:
-    frame_box = queue.Queue(maxsize=1)
-    cascade = cv.CascadeClassifier("haarcascade_frontalface_default.xml")
-    os.makedirs("Models", exist_ok=True)
-    os.chdir("Models")
-    trained_models = [f for f in os.listdir() if f.endswith("yml")]
-    start_detecting = False
-    how_much_train_img = 0
-    count = 0
-    imgs = []
-
-    def createTrainModel(self, name):
-        recognizer = cv.face.LBPHFaceRecognizer_create()
-        labels_map = {1: name}
-        labels = []
-        faces = []
-        for face in self.imgs:
-            faces.append(face)
-            labels.append(1)
-        recognizer.train(faces, np.array(labels))
-        recognizer.save(f"{name}.yml")
-    def EntryValidator(self, string, entry, btn, step):
-          if step == "1":
-            if not string:
-                entry.config(text="Please Give a num between 100, 200... 900")
-                return False
-            else:
-                match = re.match(r"\d00", string)
-                if match:
-                    entry.config(text="")
-                    btn.config(bg="red", fg="white", state=tk.DISABLED)
-                    self.start_detecting = True
-                    self.how_much_train_img = int(string)
-                    return True
-                else:
-                    entry.config(text="Please Give a num between 100, 200... 900")
-                    return False
-          elif step == "2":
-              if not string:
-                entry.config(text="Please Give Name with a-zA-Z0-9 and _")
-                return False
-              else:
-                match = re.match(r"\w{2,25}", string)
-                if match:
-                    entry.config(text="Training Model...")
-                    btn.config(bg="red", fg="white", state=tk.DISABLED)
-                    self.createTrainModel(string)
-                    entry.config(text="Model trained successfuly.")
-                    return True
-                else:
-                    entry.config(text="Please Give Name with a-zA-Z0-9 and _")
-                    return False
-
-
-    def RecordFunction(self, live=None, label=None, count=None, btn=None, input_field=None, cameraViewTwo=None):
-        res, frame = live.read()
-        if res: 
-              if self.start_detecting == True:
-                if self.count < self.how_much_train_img:
-                    self.count += 1
-                    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                    faces = self.cascade.detectMultiScale(gray, 1.1, 4, minSize=(60, 60))
-                    if len(faces) > 0:
-                        for (x, y, w, h) in faces:
-                            face = gray[y:y+h, x:x+w]
-                            self.imgs.append(face)
-                            cv.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                        count.config(text=f"{self.count}/{self.how_much_train_img} image captured.")
-                else:
-                    self.count = 0
-                    self.start_detecting = False
-                    count.config(text="Now enter the name of this person and click the button.")
-                    btn.config(bg="green", fg="white", state=tk.ACTIVE, text="Click to train the model", command=lambda: self.EntryValidator(input_field.get(), count, btn, "2"))
-                    
-              RGB_img = cv.cvtColor(frame, cv.COLOR_BGR2RGBA)
-              FromArrImg = Image.fromarray(RGB_img)
-              photo = ImageTk.PhotoImage(image=FromArrImg)
-              label.photo_image = photo
-              cameraViewTwo.photo_image = photo
-              label.configure(image=photo)
-              cameraViewTwo.configure(image=photo)
-              label.after(10, lambda: self.RecordFunction(live, label, count, btn, input_field, cameraViewTwo))
-    
-    def UserInterface(self):
-        live = cv.VideoCapture(0)
-        live.set(cv.CAP_PROP_FRAME_WIDTH, 500)
-        live.set(cv.CAP_PROP_FRAME_HEIGHT, 400)
-        live.set(cv.CAP_PROP_BUFFERSIZE, 1)
+    def __init__(self):
         root = tk.Tk()
-        root.geometry("600x600")
+        root.geometry('600x700')
         root.resizable(False, False)
         notebook = ttk.Notebook(root)
-        notebook.pack(expand=True, fill="both")
-        trainModel = tk.Frame(notebook)
-        trainModel.pack(expand=True, fill="both")
-        useModel = tk.Frame(notebook)
-        useModel.pack(expand=True, fill="both")
-        notebook.add(trainModel, text="Train Model")
-        notebook.add(useModel, text="Use Models")
-        cameraView = tk.Label(trainModel)
-        cameraView.pack(padx=10, pady=10)
-        count = tk.Label(trainModel, text="Welcome to face detector, here you can make you own model by\n giving the number of Image you want to take (100, 200...900)")
-        count.pack(padx=10, pady=5)
-        input_field = tk.Entry(trainModel)
-        input_field.pack(anchor="center", padx=20, pady=10)
-        btn = tk.Button(trainModel,bg="green", fg="white", text="Click here to start face capturing", command=lambda: self.EntryValidator(input_field.get(), count, btn, "1"))
-        btn.pack(anchor="center", padx=20, pady=10)
-        cameraViewTwo = tk.Label(useModel)
-        cameraViewTwo.pack(padx=10, pady=10)
-        self.RecordFunction(live, cameraView, count, btn, input_field, cameraViewTwo)
-        if len(self.trained_models) > 0:
-            listbox = ttk.Combobox(useModel, values=self.trained_models, state="readonly")
-            listbox.set("Select Model")
+        notebook.pack(expand=True)
+        Train_model = tk.Frame(notebook)
+        Train_model.pack(expand=True, fill="both")
+        Use_model = tk.Frame(notebook)
+        Use_model.pack(expand=True, fill="both")
+        notebook.add(Train_model, text="Train Model")
+        notebook.add(Use_model, text='Use Model')
+
+        #widgets of first tab
+        CameraField = tk.Label(Train_model)
+        CameraField.pack(pady=10)
+
+        TextArea = tk.Label(Train_model, text="Welcome to face detector, here you can train you own model. Lets starting by\nentring the number of pictures you want to take from 100...900.")
+        TextArea.pack(pady=15)
+
+        TextField = tk.Entry(Train_model)
+        TextField.pack(pady=10)
+
+        StartBtn = tk.Button(Train_model, text="Click To Start", command=lambda: Validator.NumberVal("1", TextField.get(), TextArea))
+        StartBtn.pack()
+
+        #Widgets of second tab
+        CameraFieldTwo = tk.Label(Use_model)
+        CameraFieldTwo.pack(pady=10)
+
+        CurentModels = [m for m in os.listdir() if m.endswith(".yml")]
+        if len(CurentModels) > 0:
+            ModelsList = ttk.Combobox(Use_model, values=CurentModels, state="readonly")
+            ModelsList.set("Chose Model")
         else:
-            listbox = ttk.Combobox(useModel, state="readonly")
-            listbox.set("No Model Found")
-        listbox.pack(padx=10, pady=5)
+            ModelsList = ttk.Combobox(Use_model, state="readonly")
+            ModelsList.set("No Model Trained")
+        ModelsList.pack(padx=10, pady=5)
+        def changeModelList():
+            CurentModels = [m for m in os.listdir() if m.endswith(".yml")]
+            if len(CurentModels) > 0:
+                ModelsList.config(values=CurentModels)
+                if ModelsList.get() not in CurentModels:
+                    ModelsList.set("Chose Model")
+            else:
+                ModelsList.config(values=())
+                ModelsList.set("No Model Trained")
+            root.after(1000, changeModelList)
+
+        changeModelList()
+
+        Camera = CameraRecord()
+        Camera.ShowRecord(CameraField, CameraFieldTwo, notebook)
+        threading.Thread(target=Camera.FaceDetecting, args=(TextArea, StartBtn, TextField), daemon=True).start()
+        TextAreaTwo = tk.Label(Use_model, text="Welcome to face detector, here you can train you own model. Lets starting by\nentring the number of pictures you want to take from 100...900.")
+        TextAreaTwo.pack(pady=15)
+        RecognitionBtn = tk.Button(Use_model, text="Click here", command=lambda:Camera.LoadFaceRecognition(ModelsList.get(), TextAreaTwo))
+        RecognitionBtn.pack()
+
+
+
+        def onClose():
+            global running, live, inRecognition
+            running = False
+            inRecognition = False
+            if live.isOpened():
+                live.release()
+            root.destroy()
+            os._exit(0)
+
+        root.protocol("WM_DELETE_WINDOW", onClose)
         root.mainloop()
 
-
-
-UI = UserInterface()
-UI.UserInterface()
+App = UserInterface()
